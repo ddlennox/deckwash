@@ -20,33 +20,6 @@ import tempfile
 import webbrowser
 from pathlib import Path
 
-# ── Check dependencies are installed ─────────────────────────────────────────
-missing = []
-try:
-    from flask import Flask, request, send_file, jsonify, Response, stream_with_context
-except ImportError:
-    missing.append('flask')
-
-try:
-    from lxml import etree as _etree_check
-except ImportError:
-    missing.append('lxml')
-
-if missing:
-    pkgs = ' '.join(missing)
-    print(f"\n❌  Missing packages: {pkgs}")
-    print(f"\n    Installing now — please wait…\n")
-    import subprocess
-    result = subprocess.run(
-        [sys.executable, '-m', 'pip', 'install', '--break-system-packages', '-q'] + missing,
-        capture_output=True
-    )
-    if result.returncode != 0:
-        # Try without --break-system-packages (older pip)
-        subprocess.run([sys.executable, '-m', 'pip', 'install', '-q'] + missing)
-    print(f"    ✓ Done! Restarting DeckWash…\n")
-    os.execv(sys.executable, [sys.executable] + sys.argv)
-
 from flask import Flask, request, send_file, jsonify, Response, stream_with_context
 
 # ── App setup ─────────────────────────────────────────────────────────────────
@@ -603,6 +576,26 @@ function escHtml(s) {
 
 # ── Launch ────────────────────────────────────────────────────────────────────
 if __name__ == '__main__':
+    # ── Local-only: auto-install missing packages then restart ────────────────
+    import subprocess
+    missing = []
+    try:
+        import flask
+    except ImportError:
+        missing.append('flask')
+    try:
+        from lxml import etree
+    except ImportError:
+        missing.append('lxml')
+    if missing:
+        print(f"\n❌  Installing missing packages: {' '.join(missing)}…\n")
+        r = subprocess.run([sys.executable, '-m', 'pip', 'install',
+                            '--break-system-packages', '-q'] + missing, capture_output=True)
+        if r.returncode != 0:
+            subprocess.run([sys.executable, '-m', 'pip', 'install', '-q'] + missing)
+        print("    ✓ Done! Restarting…\n")
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
     PORT = int(os.environ.get('PORT', 5001))
 
     if IS_CLOUD:
