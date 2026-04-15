@@ -1,0 +1,20 @@
+# Case study files — keep out of git (too large)
+old_case_studies/
+new_case_studies/
+
+# Keep only the two template PPTX files needed for conversion
+*.pptx
+!New Case Study Example - Pokemon.pptx
+!New testimonial page - example.pptx
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# macOS
+.DS_Store
+
+# Temp/lock files
+~$*
