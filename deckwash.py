@@ -68,9 +68,15 @@ def run_conversion(job_id, input_path, output_path):
         sys.path.insert(0, str(BASE_DIR))
         from convert_case_study import convert_pptx
         convert_pptx(str(input_path), str(output_path))
+        out_name = Path(output_path).name
+        if IS_CLOUD:
+            # Read converted file into memory so it survives temp dir cleanup
+            with open(str(output_path), 'rb') as fh:
+                job['file_bytes'] = fh.read()
+            job['out_name'] = out_name
         job['status'] = 'done'
         job['output_path'] = str(output_path)
-        q.put({'type': 'done', 'filename': Path(output_path).name, 'cloud': IS_CLOUD})
+        q.put({'type': 'done', 'filename': out_name, 'cloud': IS_CLOUD})
     except Exception as e:
         job['status'] = 'error'
         q.put({'type': 'error', 'message': str(e)})
@@ -143,10 +149,23 @@ def status(job_id):
 @app.route('/download/<job_id>')
 def download(job_id):
     job = jobs.get(job_id)
-    if not job or not job.get('output_path'):
+    if not job:
         return 'File not found', 404
-    path = job['output_path']
-    if not os.path.exists(path):
+    if IS_CLOUD:
+        # Serve from in-memory bytes — reliable on ephemeral filesystems
+        file_bytes = job.get('file_bytes')
+        out_name   = job.get('out_name', 'rebranded.pptx')
+        if not file_bytes:
+            return 'File not found', 404
+        return send_file(
+            io.BytesIO(file_bytes),
+            as_attachment=True,
+            download_name=out_name,
+            mimetype='application/vnd.openxmlformats-officedocument.presentationml.presentation'
+        )
+    # Local: serve from disk
+    path = job.get('output_path')
+    if not path or not os.path.exists(path):
         return 'File not found', 404
     return send_file(path, as_attachment=True, download_name=Path(path).name)
 
