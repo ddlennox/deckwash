@@ -252,14 +252,6 @@ HTML = """<!DOCTYPE html>
     line-height: 1;
   }
 
-  header .tagline {
-    font-family: 'Galvji', Georgia, serif;
-    font-size: 0.9rem;
-    color: #46DE66;
-    font-weight: 400;
-    letter-spacing: 0.02em;
-    margin-top: 6px;
-  }
 
   /* ── Hero strip ── */
   .hero {
@@ -524,7 +516,6 @@ HTML = """<!DOCTYPE html>
     <span class="wave">🌊</span>
     <h1>DeckWash</h1>
   </div>
-  <div class="tagline">Drop your decks. Get them rebranded.</div>
 </header>
 
 <div class="hero">
@@ -545,7 +536,7 @@ HTML = """<!DOCTYPE html>
   <div id="job-list"></div>
 </main>
 
-<footer><strong>DECKWASH</strong> &nbsp;·&nbsp; A Sense rebrand tool</footer>
+<footer><strong>DECKWASH</strong> &nbsp;·&nbsp; A Sense rebrand tool &nbsp;·&nbsp; Drop your decks. Get them rebranded.</footer>
 
 <script>
 const dropZone   = document.getElementById('drop-zone');
