@@ -20,11 +20,16 @@ import tempfile
 import webbrowser
 from pathlib import Path
 
-from flask import Flask, request, send_file, jsonify, Response, stream_with_context
+from flask import Flask, request, send_file, jsonify, Response, stream_with_context, session, redirect, url_for
 
 # ── App setup ─────────────────────────────────────────────────────────────────
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500 MB max upload
+app.secret_key = os.environ.get('SECRET_KEY', 'deckwash-local-secret-key')
+
+# ── Auth helper ───────────────────────────────────────────────────────────────
+def get_password():
+    return os.environ.get('DECKWASH_PASSWORD', 'deckwash')
 
 # In-memory job store: job_id -> job dict
 jobs = {}
@@ -84,14 +89,181 @@ def run_conversion(job_id, input_path, output_path):
         sys.stdout = old_stdout
 
 
+# ── Login page HTML ───────────────────────────────────────────────────────────
+LOGIN_HTML = '''<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DeckWash — Login</title>
+<style>
+  @font-face {
+    font-family: 'Obviously Narrow';
+    src: url('/fonts/ObviouslyNarrow-Bold 1.otf') format('opentype');
+    font-weight: 700;
+  }
+  @font-face {
+    font-family: 'Galvji';
+    src: url('/fonts/galvji.ttf') format('truetype');
+    font-weight: 400;
+  }
+  @font-face {
+    font-family: 'Galvji';
+    src: url('/fonts/galvji-bold.ttf') format('truetype');
+    font-weight: 700;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #231F20;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Galvji', Georgia, serif;
+  }
+
+  .logo {
+    font-family: 'Obviously Narrow', sans-serif;
+    font-size: 3rem;
+    font-weight: 700;
+    color: #FFFFFF;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 6px;
+  }
+
+  .wave { font-size: 2rem; margin-right: 8px; }
+
+  .sub {
+    font-family: 'Galvji', Georgia, serif;
+    font-size: 0.9rem;
+    color: #46DE66;
+    margin-bottom: 40px;
+    letter-spacing: 0.02em;
+  }
+
+  .card {
+    background: #FFFAF0;
+    border-radius: 6px;
+    padding: 36px 40px;
+    width: 100%;
+    max-width: 380px;
+  }
+
+  .card h2 {
+    font-family: 'Obviously Narrow', sans-serif;
+    font-size: 1.3rem;
+    font-weight: 700;
+    color: #231F20;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 20px;
+  }
+
+  label {
+    display: block;
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: #231F20;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+
+  input[type="password"] {
+    width: 100%;
+    padding: 12px 14px;
+    border: 2px solid #E0D9CE;
+    border-radius: 4px;
+    font-family: 'Galvji', Georgia, serif;
+    font-size: 1rem;
+    color: #231F20;
+    background: #FFFFFF;
+    outline: none;
+    transition: border-color 0.15s;
+    margin-bottom: 20px;
+  }
+
+  input[type="password"]:focus { border-color: #46DE66; }
+
+  button {
+    width: 100%;
+    background: #46DE66;
+    color: #231F20;
+    border: none;
+    border-radius: 4px;
+    padding: 13px;
+    font-family: 'Obviously Narrow', sans-serif;
+    font-size: 1rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+
+  button:hover { background: #30c452; }
+
+  .error {
+    background: #fde8e8;
+    border: 1px solid #f5b7b7;
+    color: #c0392b;
+    border-radius: 4px;
+    padding: 10px 14px;
+    font-size: 0.85rem;
+    margin-bottom: 16px;
+  }
+</style>
+</head>
+<body>
+  <div class="logo"><span class="wave">🌊</span>DeckWash</div>
+  <div class="sub">A Sense rebrand tool</div>
+  <div class="card">
+    <h2>Sign in</h2>
+    {% if error %}<div class="error">Incorrect password — try again.</div>{% endif %}
+    <form method="POST" action="/login">
+      <label for="password">Password</label>
+      <input type="password" id="password" name="password" autofocus placeholder="Enter password">
+      <button type="submit">Let me in</button>
+    </form>
+  </div>
+</body>
+</html>'''
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    error = False
+    if request.method == 'POST':
+        if request.form.get('password') == get_password():
+            session['logged_in'] = True
+            return redirect(url_for('index'))
+        error = True
+    from flask import render_template_string
+    return render_template_string(LOGIN_HTML, error=error)
+
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('login'))
+
+
 @app.route('/')
 def index():
+    if not session.get('logged_in'):
+        return redirect(url_for('login'))
     return HTML
 
 
 @app.route('/convert', methods=['POST'])
 def convert():
+    if not session.get('logged_in'):
+        return jsonify({'error': 'Not authenticated'}), 401
     if 'file' not in request.files:
         return jsonify({'error': 'No file provided'}), 400
 
@@ -123,6 +295,9 @@ def convert():
 
 @app.route('/status/<job_id>')
 def status(job_id):
+    if not session.get('logged_in'):
+        return Response("data: {\"type\":\"error\",\"message\":\"Not authenticated\"}\n\n",
+                        mimetype='text/event-stream')
     job = jobs.get(job_id)
     if not job:
         return Response("data: {\"type\":\"error\",\"message\":\"Job not found\"}\n\n",
@@ -148,6 +323,8 @@ def status(job_id):
 
 @app.route('/download/<job_id>')
 def download(job_id):
+    if not session.get('logged_in'):
+        return 'Not authenticated', 401
     job = jobs.get(job_id)
     if not job:
         return 'File not found', 404
