@@ -170,164 +170,252 @@ def download(job_id):
     return send_file(path, as_attachment=True, download_name=Path(path).name)
 
 
+# ── Font serving ─────────────────────────────────────────────────────────────
+@app.route('/fonts/<path:filename>')
+def serve_font(filename):
+    return send_file(str(BASE_DIR / filename), mimetype='font/truetype')
+
+
 # ── HTML template ─────────────────────────────────────────────────────────────
 HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>DeckWash 🌊</title>
+<title>DeckWash</title>
 <style>
+  @font-face {
+    font-family: 'Obviously Narrow';
+    src: url('/fonts/ObviouslyNarrow-Bold 1.otf') format('opentype');
+    font-weight: 700;
+    font-style: normal;
+  }
+  @font-face {
+    font-family: 'Galvji';
+    src: url('/fonts/galvji.ttf') format('truetype');
+    font-weight: 400;
+    font-style: normal;
+  }
+  @font-face {
+    font-family: 'Galvji';
+    src: url('/fonts/galvji-bold.ttf') format('truetype');
+    font-weight: 700;
+    font-style: normal;
+  }
+  @font-face {
+    font-family: 'Galvji';
+    src: url('/fonts/galvji-oblique.ttf') format('truetype');
+    font-weight: 400;
+    font-style: italic;
+  }
+
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
   body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-family: 'Galvji', Georgia, serif;
     background: #FFFAF0;
     min-height: 100vh;
     display: flex;
     flex-direction: column;
   }
 
+  /* ── Header ── */
   header {
     background: #231F20;
-    color: #FFFAF0;
-    padding: 28px 40px;
+    padding: 0 48px;
+    height: 72px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .header-left {
     display: flex;
     align-items: baseline;
-    gap: 16px;
+    gap: 12px;
   }
 
   header h1 {
-    font-size: 2rem;
-    font-weight: 800;
-    letter-spacing: -0.5px;
+    font-family: 'Obviously Narrow', sans-serif;
+    font-size: 2.2rem;
+    font-weight: 700;
+    color: #FFFFFF;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
   }
 
-  header span.wave { font-size: 1.8rem; }
+  header .wave {
+    font-size: 1.4rem;
+    line-height: 1;
+  }
 
-  header p {
+  header .tagline {
+    font-family: 'Galvji', Georgia, serif;
+    font-size: 0.9rem;
     color: #46DE66;
-    font-size: 0.95rem;
-    font-weight: 500;
-    margin-left: auto;
-    opacity: 0.9;
+    font-weight: 400;
+    letter-spacing: 0.02em;
   }
 
+  /* ── Hero strip ── */
+  .hero {
+    background: #231F20;
+    padding: 48px 48px 56px;
+    border-bottom: 4px solid #46DE66;
+  }
+
+  .hero h2 {
+    font-family: 'Obviously Narrow', sans-serif;
+    font-size: 3.2rem;
+    font-weight: 700;
+    color: #FFFFFF;
+    text-transform: uppercase;
+    line-height: 1;
+    margin-bottom: 12px;
+    letter-spacing: 0.5px;
+  }
+
+  .hero p {
+    font-family: 'Galvji', Georgia, serif;
+    font-size: 1rem;
+    color: rgba(255,255,255,0.65);
+    max-width: 480px;
+    line-height: 1.6;
+  }
+
+  /* ── Main content ── */
   main {
     flex: 1;
     display: flex;
     flex-direction: column;
     align-items: center;
-    padding: 60px 24px;
-    gap: 40px;
+    padding: 52px 24px 60px;
+    gap: 32px;
   }
 
   /* ── Drop zone ── */
   #drop-zone {
     width: 100%;
-    max-width: 640px;
-    border: 3px dashed #ccc;
-    border-radius: 20px;
-    background: #fff;
-    padding: 60px 40px;
+    max-width: 680px;
+    border: 2px dashed #C8C4B0;
+    border-radius: 4px;
+    background: #FFFFFF;
+    padding: 56px 40px;
     text-align: center;
     cursor: pointer;
     transition: border-color 0.2s, background 0.2s, transform 0.15s;
-    position: relative;
   }
 
   #drop-zone.drag-over {
     border-color: #46DE66;
-    background: #f0fff5;
+    background: #F5FFF8;
     transform: scale(1.01);
   }
 
-  #drop-zone .icon {
-    font-size: 3.5rem;
-    margin-bottom: 16px;
-    display: block;
+  #drop-zone .drop-icon {
+    width: 52px;
+    height: 52px;
+    background: #231F20;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 20px;
+    font-size: 1.4rem;
   }
 
-  #drop-zone h2 {
-    font-size: 1.3rem;
-    color: #231F20;
-    margin-bottom: 8px;
+  #drop-zone h3 {
+    font-family: 'Obviously Narrow', sans-serif;
+    font-size: 1.5rem;
     font-weight: 700;
+    color: #231F20;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    margin-bottom: 8px;
   }
 
   #drop-zone p {
+    font-family: 'Galvji', Georgia, serif;
     color: #888;
-    font-size: 0.9rem;
-    line-height: 1.5;
+    font-size: 0.92rem;
+    line-height: 1.6;
+    margin-bottom: 24px;
   }
 
-  #drop-zone .browse-btn {
+  .browse-btn {
     display: inline-block;
-    margin-top: 20px;
-    padding: 10px 28px;
-    background: #231F20;
-    color: #FFFAF0;
-    border-radius: 100px;
-    font-size: 0.9rem;
-    font-weight: 600;
+    padding: 11px 32px;
+    background: #46DE66;
+    color: #231F20;
+    font-family: 'Obviously Narrow', sans-serif;
+    font-size: 1rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-radius: 2px;
     cursor: pointer;
-    transition: background 0.2s;
+    transition: background 0.2s, transform 0.1s;
   }
 
-  #drop-zone .browse-btn:hover { background: #3a3536; }
+  .browse-btn:hover { background: #35c455; transform: scale(1.02); }
 
   #file-input { display: none; }
 
   /* ── Job list ── */
   #job-list {
     width: 100%;
-    max-width: 640px;
+    max-width: 680px;
     display: flex;
     flex-direction: column;
     gap: 16px;
   }
 
   .job-card {
-    background: #fff;
-    border-radius: 16px;
+    background: #FFFFFF;
+    border-radius: 4px;
+    border-left: 4px solid #231F20;
     padding: 24px 28px;
-    box-shadow: 0 2px 12px rgba(0,0,0,0.07);
-    animation: slideIn 0.3s ease;
+    box-shadow: 0 2px 16px rgba(35,31,32,0.08);
+    animation: slideIn 0.25s ease;
   }
 
   @keyframes slideIn {
-    from { opacity: 0; transform: translateY(12px); }
+    from { opacity: 0; transform: translateY(10px); }
     to   { opacity: 1; transform: translateY(0); }
   }
 
   .job-card .job-name {
-    font-size: 1rem;
+    font-family: 'Obviously Narrow', sans-serif;
+    font-size: 1.05rem;
     font-weight: 700;
     color: #231F20;
-    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    margin-bottom: 4px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
   .job-card .job-status {
-    font-size: 0.82rem;
-    color: #888;
+    font-family: 'Galvji', Georgia, serif;
+    font-size: 0.85rem;
+    color: #999;
     margin-bottom: 14px;
     min-height: 18px;
     transition: color 0.2s;
   }
 
-  .job-card .job-status.done-text { color: #2aaa50; font-weight: 600; }
-  .job-card .job-status.error-text { color: #e04040; font-weight: 600; }
+  .job-card .job-status.done-text  { color: #1a7a36; font-weight: 700; }
+  .job-card .job-status.error-text { color: #c0392b; font-weight: 700; }
 
   /* Progress bar */
   .progress-track {
-    height: 8px;
-    background: #f0f0f0;
+    height: 6px;
+    background: #EDE9DE;
     border-radius: 100px;
     overflow: hidden;
-    margin-bottom: 16px;
+    margin-bottom: 18px;
   }
 
   .progress-bar {
@@ -340,18 +428,18 @@ HTML = """<!DOCTYPE html>
 
   .progress-bar.indeterminate {
     animation: indeterminate 1.4s ease infinite;
-    width: 40%;
+    width: 38%;
   }
 
   @keyframes indeterminate {
-    0%   { transform: translateX(-100%); }
-    100% { transform: translateX(350%); }
+    0%   { transform: translateX(-130%); }
+    100% { transform: translateX(400%); }
   }
 
   .progress-bar.complete { width: 100% !important; animation: none; }
-  .progress-bar.error    { background: #e04040; width: 100% !important; animation: none; }
+  .progress-bar.error    { background: #c0392b; width: 100% !important; animation: none; }
 
-  /* Saved badge */
+  /* Action badge / download */
   .saved-badge {
     display: inline-flex;
     align-items: center;
@@ -359,79 +447,105 @@ HTML = """<!DOCTYPE html>
     padding: 10px 24px;
     background: #46DE66;
     color: #231F20;
-    border-radius: 100px;
-    font-size: 0.9rem;
+    font-family: 'Obviously Narrow', sans-serif;
+    font-size: 0.95rem;
     font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    border-radius: 2px;
+    text-decoration: none;
+    cursor: pointer;
+    transition: background 0.2s;
   }
+
+  .saved-badge:hover { background: #35c455; }
 
   /* Log drawer */
   .log-toggle {
     background: none;
     border: none;
-    color: #aaa;
+    font-family: 'Galvji', Georgia, serif;
+    color: #bbb;
     font-size: 0.78rem;
     cursor: pointer;
-    margin-top: 10px;
+    margin-top: 12px;
     padding: 0;
     text-decoration: underline;
     display: block;
   }
 
-  .log-toggle:hover { color: #666; }
+  .log-toggle:hover { color: #888; }
 
   .log-box {
     margin-top: 10px;
-    background: #f7f7f7;
-    border-radius: 10px;
+    background: #F5F3EE;
+    border-radius: 2px;
     padding: 12px 14px;
-    font-size: 0.75rem;
+    font-size: 0.73rem;
     font-family: 'SF Mono', 'Menlo', monospace;
-    color: #555;
-    max-height: 160px;
+    color: #666;
+    max-height: 150px;
     overflow-y: auto;
     display: none;
-    line-height: 1.6;
+    line-height: 1.7;
   }
 
   .log-box.visible { display: block; }
 
+  /* ── Footer ── */
   footer {
+    background: #231F20;
     text-align: center;
-    padding: 24px;
-    color: #bbb;
+    padding: 20px 24px;
+    font-family: 'Galvji', Georgia, serif;
     font-size: 0.8rem;
+    color: rgba(255,255,255,0.35);
+    letter-spacing: 0.03em;
+  }
+
+  footer strong {
+    font-family: 'Obviously Narrow', sans-serif;
+    color: rgba(255,255,255,0.6);
+    font-size: 0.85rem;
+    letter-spacing: 0.5px;
   }
 </style>
 </head>
 <body>
 
 <header>
-  <span class="wave">🌊</span>
-  <h1>DeckWash</h1>
-  <p>Drop your decks. Get them rebranded.</p>
+  <div class="header-left">
+    <span class="wave">🌊</span>
+    <h1>DeckWash</h1>
+  </div>
+  <span class="tagline">Drop your decks. Get them rebranded.</span>
 </header>
+
+<div class="hero">
+  <h2>Rebrand in seconds</h2>
+  <p>Drop your old case study decks below. DeckWash applies the new brand — fonts, colours, backgrounds — instantly.</p>
+</div>
 
 <main>
   <div id="drop-zone">
-    <span class="icon">📂</span>
-    <h2>Drop your PPTX files here</h2>
+    <div class="drop-icon">📂</div>
+    <h3>Drop PPTX files here</h3>
     <p>Drag one or more files onto this area, or click the button below.<br>
        Your rebranded files will be ready to download in moments.</p>
-    <label class="browse-btn" for="file-input">Browse files…</label>
+    <label class="browse-btn" for="file-input">Browse files</label>
     <input type="file" id="file-input" accept=".pptx" multiple>
   </div>
 
   <div id="job-list"></div>
 </main>
 
-<footer>DeckWash — Rebrand tool by Sense</footer>
+<footer><strong>DECKWASH</strong> &nbsp;·&nbsp; A Sense rebrand tool</footer>
 
 <script>
 const dropZone   = document.getElementById('drop-zone');
 const fileInput  = document.getElementById('file-input');
 const jobList    = document.getElementById('job-list');
 
-// ── Drag & drop handlers ────────────────────────────────────────────────────
 ['dragenter','dragover'].forEach(e =>
   dropZone.addEventListener(e, ev => { ev.preventDefault(); dropZone.classList.add('drag-over'); })
 );
@@ -448,14 +562,11 @@ fileInput.addEventListener('change', () => {
   fileInput.value = '';
 });
 
-// ── Start a conversion job ──────────────────────────────────────────────────
 function startJob(file) {
   const card = createCard(file.name);
   const formData = new FormData();
   formData.append('file', file);
-
   setStatus(card, 'Uploading…');
-
   fetch('/convert', { method: 'POST', body: formData })
     .then(r => r.json())
     .then(data => {
@@ -466,33 +577,24 @@ function startJob(file) {
     .catch(err => showError(card, err.message));
 }
 
-// ── Stream SSE status updates ───────────────────────────────────────────────
 function streamStatus(card, jobId) {
   const es = new EventSource(`/status/${jobId}`);
   let slideCount = 0;
-  let slideDone  = 0;
 
   es.onmessage = ev => {
     const msg = JSON.parse(ev.data);
-
     if (msg.type === 'ping') return;
 
     if (msg.type === 'log') {
       appendLog(card, msg.message);
-
-      // Parse slide count
       const foundMatch = msg.message.match(/Found (\\d+) slides/);
       if (foundMatch) slideCount = parseInt(foundMatch[1]);
-
-      // Parse current slide progress
       const slideMatch = msg.message.match(/Slide (\\d+):/);
       if (slideMatch && slideCount > 0) {
-        slideDone = parseInt(slideMatch[1]);
-        const pct = Math.round((slideDone / slideCount) * 85); // reserve 15% for fonts
+        const pct = Math.round((parseInt(slideMatch[1]) / slideCount) * 85);
         setProgress(card, pct);
-        setStatus(card, `Processing slide ${slideDone} of ${slideCount}…`);
+        setStatus(card, `Processing slide ${slideMatch[1]} of ${slideCount}…`);
       }
-
       if (msg.message.toLowerCase().includes('embedding font')) {
         setProgress(card, 90);
         setStatus(card, 'Embedding fonts…');
@@ -501,7 +603,7 @@ function streamStatus(card, jobId) {
 
     if (msg.type === 'done') {
       setProgress(card, 100, 'complete');
-      setStatus(card, msg.cloud ? '✓ Done! Click to download.' : '✓ Saved to new case studies folder.', 'done-text');
+      setStatus(card, msg.cloud ? '✓ Ready to download' : '✓ Saved to new case studies folder', 'done-text');
       showDownload(card, jobId, msg.filename, msg.cloud);
       es.close();
     }
@@ -513,22 +615,16 @@ function streamStatus(card, jobId) {
     }
   };
 
-  es.onerror = () => {
-    showError(card, 'Connection lost — please try again.');
-    es.close();
-  };
+  es.onerror = () => { showError(card, 'Connection lost — please try again.'); es.close(); };
 }
 
-// ── Card helpers ────────────────────────────────────────────────────────────
 function createCard(filename) {
   const card = document.createElement('div');
   card.className = 'job-card';
   card.innerHTML = `
     <div class="job-name">${escHtml(filename)}</div>
     <div class="job-status">Preparing…</div>
-    <div class="progress-track">
-      <div class="progress-bar indeterminate"></div>
-    </div>
+    <div class="progress-track"><div class="progress-bar indeterminate"></div></div>
     <div class="job-actions"></div>
     <button class="log-toggle" onclick="toggleLog(this)">Show details</button>
     <div class="log-box"></div>
@@ -555,7 +651,6 @@ function showDownload(card, jobId, filename, isCloud) {
   if (isCloud) {
     const btn = document.createElement('a');
     btn.className = 'saved-badge';
-    btn.style.cssText = 'text-decoration:none;cursor:pointer;';
     btn.href = `/download/${jobId}`;
     btn.download = filename;
     btn.innerHTML = '⬇ Download ' + escHtml(filename);
@@ -570,7 +665,7 @@ function showDownload(card, jobId, filename, isCloud) {
 
 function showError(card, msg) {
   setProgress(card, 100, 'error');
-  setStatus(card, '✗ Error: ' + msg, 'error-text');
+  setStatus(card, '✗ ' + msg, 'error-text');
 }
 
 function appendLog(card, text) {
@@ -581,8 +676,7 @@ function appendLog(card, text) {
 
 function toggleLog(btn) {
   const box = btn.nextElementSibling;
-  const visible = box.classList.toggle('visible');
-  btn.textContent = visible ? 'Hide details' : 'Show details';
+  btn.textContent = box.classList.toggle('visible') ? 'Hide details' : 'Show details';
 }
 
 function escHtml(s) {
