@@ -222,17 +222,19 @@ HTML = """<!DOCTYPE html>
   /* ── Header ── */
   header {
     background: #231F20;
-    padding: 0 48px;
-    height: 72px;
+    padding: 20px 48px 16px;
     display: flex;
+    flex-direction: column;
     align-items: center;
-    justify-content: space-between;
+    justify-content: center;
+    text-align: center;
   }
 
   .header-left {
     display: flex;
     align-items: baseline;
     gap: 12px;
+    justify-content: center;
   }
 
   header h1 {
@@ -255,6 +257,7 @@ HTML = """<!DOCTYPE html>
     color: #46DE66;
     font-weight: 400;
     letter-spacing: 0.02em;
+    margin-top: 6px;
   }
 
   /* ── Hero strip ── */
@@ -518,7 +521,7 @@ HTML = """<!DOCTYPE html>
     <span class="wave">🌊</span>
     <h1>DeckWash</h1>
   </div>
-  <span class="tagline">Drop your decks. Get them rebranded.</span>
+  <div class="tagline">Drop your decks. Get them rebranded.</div>
 </header>
 
 <div class="hero">
