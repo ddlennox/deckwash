@@ -226,8 +226,9 @@ HTML = """<!DOCTYPE html>
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
+    justify-content: space-between;
     text-align: center;
+    min-height: 90px;
   }
 
   .header-left {
@@ -265,6 +266,7 @@ HTML = """<!DOCTYPE html>
     background: #231F20;
     padding: 48px 48px 56px;
     border-bottom: 4px solid #46DE66;
+    text-align: center;
   }
 
   .hero h2 {
@@ -284,6 +286,7 @@ HTML = """<!DOCTYPE html>
     color: rgba(255,255,255,0.65);
     max-width: 480px;
     line-height: 1.6;
+    margin: 0 auto;
   }
 
   /* ── Main content ── */
