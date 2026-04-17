@@ -436,33 +436,95 @@ def fix_content_spacing(txBody):
 
 def add_separator_line(root):
     """
-    Add a thin dark horizontal line between the intro paragraph and CHALLENGE
-    on content slides. Matches the 'Line Placeholder' in the new Pokemon layout.
-    We position it at x of the content column, y ≈ 1870000 (~2.04"), h = 12700.
+    Add a thin dark horizontal line between the intro paragraph(s) and the first
+    section header (CHALLENGE / EXECUTION / RESULTS) on content slides.
+
+    Dynamic rules:
+      • If no intro paragraphs exist before the first header, no line is added
+        (a floating line would look disconnected from content).
+      • The line spans the same x/width as the shape containing the header.
+      • Its y is computed from the shape's top + estimated height of the intro
+        text, based on 11 pt Galvji body text and the text box width.
     """
     spTree = root.find(f'.//{{{PP}}}spTree')
     if spTree is None:
         return
 
-    # Find the content placeholder to get its x position and width
-    content_x  = 6235700   # default from new Pokemon layout 47
-    content_cx = 4788000
+    # ── Locate the shape + paragraph index of the first section header ────
+    target_sp = None
+    header_para_idx = None
+    intro_paras = []
 
-    for sp in spTree.findall(qn('p', 'sp')):
-        ph = sp.find(f'.//{{{PP}}}ph')
-        if ph is not None and ph.get('idx') == '1':   # idx=1 is the generic content ph
-            xfrm = sp.find(f'.//{{{A}}}xfrm')
-            if xfrm is not None:
-                off = xfrm.find(qn('a', 'off'))
-                ext = xfrm.find(qn('a', 'ext'))
-                if off is not None:
-                    content_x = int(off.get('x', content_x))
-                if ext is not None:
-                    content_cx = int(ext.get('cx', content_cx))
+    for sp in spTree.iter(qn('p', 'sp')):
+        txBody = sp.find(qn('p', 'txBody'))
+        if txBody is None:
+            continue
+        paras = txBody.findall(qn('a', 'p'))
+        for i, para in enumerate(paras):
+            for r in para.findall(qn('a', 'r')):
+                rpr = r.find(qn('a', 'rPr'))
+                t   = r.find(qn('a', 't'))
+                text = (t.text or '').strip() if t is not None else ''
+                if rpr is not None and run_is_bold(rpr) and is_header_text(text):
+                    target_sp = sp
+                    header_para_idx = i
+                    intro_paras = [
+                        p for p in paras[:i]
+                        if any((tt.text or '').strip()
+                               for tt in p.iter(qn('a', 't')))
+                    ]
+                    break
+            if target_sp is not None:
+                break
+        if target_sp is not None:
             break
 
-    # Build the separator shape XML
-    sep_id = 9001   # unique enough for a new shape
+    # No header found, or no intro text before it — no line
+    if target_sp is None or not intro_paras:
+        return
+
+    # ── Geometry of the header's container shape ──────────────────────────
+    xfrm = target_sp.find(f'.//{{{A}}}xfrm')
+    if xfrm is None:
+        return
+    off_el = xfrm.find(qn('a', 'off'))
+    ext_el = xfrm.find(qn('a', 'ext'))
+    if off_el is None or ext_el is None:
+        return
+
+    shape_x  = int(off_el.get('x', 0))
+    shape_y  = int(off_el.get('y', 0))
+    shape_cx = int(ext_el.get('cx', 4788000))
+    shape_cy = int(ext_el.get('cy', 0))
+
+    # ── Estimate vertical space taken by intro paragraphs ─────────────────
+    # 11 pt body × ~1.5 line-height ≈ 210 000 EMU per line.
+    # Avg Galvji 11 pt char width ≈ 6 pt ≈ 76 200 EMU.
+    AVG_CHAR_EMU = 76_200
+    LINE_HEIGHT  = 210_000
+    PARA_GAP     = 30_000
+    TOP_PADDING  = 80_000   # small gap between text and line
+
+    chars_per_line = max(10, shape_cx // AVG_CHAR_EMU)
+
+    total_lines = 0
+    for p in intro_paras:
+        text = ''.join((t.text or '') for t in p.iter(qn('a', 't'))).strip()
+        if not text:
+            continue
+        wrapped = max(1, (len(text) + chars_per_line - 1) // chars_per_line)
+        total_lines += wrapped
+
+    intro_height = total_lines * LINE_HEIGHT + max(0, len(intro_paras) - 1) * PARA_GAP
+    line_y = shape_y + intro_height + TOP_PADDING
+
+    # Clamp to stay inside the shape
+    if shape_cy > 0:
+        line_y = min(line_y, shape_y + shape_cy - 100_000)
+    line_y = max(line_y, shape_y)
+
+    # ── Build and append separator ────────────────────────────────────────
+    sep_id = 9001
     sep_xml = f'''<p:sp xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
                        xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
   <p:nvSpPr>
@@ -472,8 +534,8 @@ def add_separator_line(root):
   </p:nvSpPr>
   <p:spPr>
     <a:xfrm>
-      <a:off x="{content_x}" y="1870000"/>
-      <a:ext cx="{content_cx}" cy="12700"/>
+      <a:off x="{shape_x}" y="{line_y}"/>
+      <a:ext cx="{shape_cx}" cy="12700"/>
     </a:xfrm>
     <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
     <a:solidFill><a:srgbClr val="{DARK_BG}"/></a:solidFill>
