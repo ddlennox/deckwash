@@ -439,54 +439,101 @@ def add_separator_line(root):
     Add a thin dark horizontal line between the intro paragraph(s) and the first
     section header (CHALLENGE / EXECUTION / RESULTS) on content slides.
 
-    Dynamic rules:
-      • If no intro paragraphs exist before the first header, no line is added
-        (a floating line would look disconnected from content).
+    Handles two layout patterns:
+      1. Separate paragraphs — intro paragraph(s) followed by a header paragraph.
+      2. Single paragraph with line breaks — intro run + <a:br> + header run
+         (common pattern in decks where Challenge/Execution/Results live inside
+         one text block).
+
+    Rules:
+      • If there's no intro text before the header (header is the first thing
+        in the shape), no line is added — a floating line would look detached.
       • The line spans the same x/width as the shape containing the header.
-      • Its y is computed from the shape's top + estimated height of the intro
-        text, based on 11 pt Galvji body text and the text box width.
+      • y is computed from the shape's top + estimated height of the intro
+        text, based on 11 pt Galvji body at the text box's width.
     """
     spTree = root.find(f'.//{{{PP}}}spTree')
     if spTree is None:
         return
 
-    # ── Locate the shape + paragraph index of the first section header ────
+    AVG_CHAR_EMU = 76_200   # avg 11pt Galvji char width
+    LINE_HEIGHT  = 210_000  # 11pt × ~1.5 line-height
+    PARA_GAP     = 30_000
+    BR_HEIGHT    = 140_000  # an explicit <a:br> renders shorter than a full line
+    TOP_PADDING  = 60_000
+
     target_sp = None
-    header_para_idx = None
-    intro_paras = []
+    intro_wrapped_lines = 0     # estimated wrapped text lines before header
+    intro_extra_brs    = 0     # explicit <a:br> elements between intro and header
 
     for sp in spTree.iter(qn('p', 'sp')):
         txBody = sp.find(qn('p', 'txBody'))
         if txBody is None:
             continue
-        paras = txBody.findall(qn('a', 'p'))
-        for i, para in enumerate(paras):
-            for r in para.findall(qn('a', 'r')):
-                rpr = r.find(qn('a', 'rPr'))
-                t   = r.find(qn('a', 't'))
-                text = (t.text or '').strip() if t is not None else ''
-                if rpr is not None and run_is_bold(rpr) and is_header_text(text):
-                    target_sp = sp
-                    header_para_idx = i
-                    intro_paras = [
-                        p for p in paras[:i]
-                        if any((tt.text or '').strip()
-                               for tt in p.iter(qn('a', 't')))
-                    ]
-                    break
-            if target_sp is not None:
+        xfrm = sp.find(f'.//{{{A}}}xfrm')
+        if xfrm is None:
+            continue
+        ext_el = xfrm.find(qn('a', 'ext'))
+        if ext_el is None:
+            continue
+        shape_cx = int(ext_el.get('cx', 4788000))
+        chars_per_line = max(10, shape_cx // AVG_CHAR_EMU)
+
+        this_wrapped = 0
+        this_brs     = 0
+        found_header = False
+
+        for para in txBody.findall(qn('a', 'p')):
+            if found_header:
                 break
+            chars_before_header_in_para = 0
+            brs_before_header_in_para   = 0
+            header_in_this_para         = False
+
+            for child in list(para):
+                tag = child.tag.split('}')[-1] if '}' in child.tag else child.tag
+                if tag == 'r':
+                    rpr  = child.find(qn('a', 'rPr'))
+                    t_el = child.find(qn('a', 't'))
+                    text = (t_el.text or '') if t_el is not None else ''
+                    if (rpr is not None and run_is_bold(rpr)
+                            and is_header_text(text.strip())):
+                        target_sp = sp
+                        header_in_this_para = True
+                        break
+                    chars_before_header_in_para += len(text)
+                elif tag == 'br':
+                    brs_before_header_in_para += 1
+
+            if header_in_this_para:
+                # Only this paragraph's pre-header content counts
+                if chars_before_header_in_para > 0:
+                    this_wrapped += max(1,
+                        (chars_before_header_in_para + chars_per_line - 1) // chars_per_line)
+                this_brs += brs_before_header_in_para
+                found_header = True
+            else:
+                # Entire paragraph is intro content (or empty spacer)
+                para_text = ''.join((t.text or '')
+                                    for t in para.iter(qn('a', 't')))
+                if para_text.strip():
+                    this_wrapped += max(1,
+                        (len(para_text) + chars_per_line - 1) // chars_per_line)
+                # empty paragraphs still take vertical space
+                else:
+                    this_brs += 1
+
         if target_sp is not None:
+            intro_wrapped_lines = this_wrapped
+            intro_extra_brs    = this_brs
             break
 
-    # No header found, or no intro text before it — no line
-    if target_sp is None or not intro_paras:
+    # No header found, or no intro text/breaks before it — no line
+    if target_sp is None or (intro_wrapped_lines == 0 and intro_extra_brs == 0):
         return
 
     # ── Geometry of the header's container shape ──────────────────────────
     xfrm = target_sp.find(f'.//{{{A}}}xfrm')
-    if xfrm is None:
-        return
     off_el = xfrm.find(qn('a', 'off'))
     ext_el = xfrm.find(qn('a', 'ext'))
     if off_el is None or ext_el is None:
@@ -497,25 +544,9 @@ def add_separator_line(root):
     shape_cx = int(ext_el.get('cx', 4788000))
     shape_cy = int(ext_el.get('cy', 0))
 
-    # ── Estimate vertical space taken by intro paragraphs ─────────────────
-    # 11 pt body × ~1.5 line-height ≈ 210 000 EMU per line.
-    # Avg Galvji 11 pt char width ≈ 6 pt ≈ 76 200 EMU.
-    AVG_CHAR_EMU = 76_200
-    LINE_HEIGHT  = 210_000
-    PARA_GAP     = 30_000
-    TOP_PADDING  = 80_000   # small gap between text and line
-
-    chars_per_line = max(10, shape_cx // AVG_CHAR_EMU)
-
-    total_lines = 0
-    for p in intro_paras:
-        text = ''.join((t.text or '') for t in p.iter(qn('a', 't'))).strip()
-        if not text:
-            continue
-        wrapped = max(1, (len(text) + chars_per_line - 1) // chars_per_line)
-        total_lines += wrapped
-
-    intro_height = total_lines * LINE_HEIGHT + max(0, len(intro_paras) - 1) * PARA_GAP
+    intro_height = (intro_wrapped_lines * LINE_HEIGHT
+                    + intro_extra_brs * BR_HEIGHT
+                    + PARA_GAP)
     line_y = shape_y + intro_height + TOP_PADDING
 
     # Clamp to stay inside the shape
