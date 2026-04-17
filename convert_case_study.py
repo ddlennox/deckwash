@@ -539,6 +539,19 @@ def process_content_slide(root):
         if ph_type != 'title':
             fix_content_spacing(txBody)
 
+    # ── Table cells on content slides (e.g. stats/comparison tables) ──
+    # Update font + colour but preserve intentional sizes, matching the
+    # grid-slide table handling.
+    for tc in root.iter(qn('a', 'tc')):
+        for rpr in tc.iter(qn('a', 'rPr')):
+            clear_latin(rpr)
+            set_color(rpr, DARK_TEXT)
+            rpr.append(latin_element(FONT_BODY))
+        for endrpr in tc.iter(qn('a', 'endParaRPr')):
+            clear_latin(endrpr)
+            set_color(endrpr, DARK_TEXT)
+            endrpr.append(latin_element(FONT_BODY))
+
     # Add the separator line above CHALLENGE
     add_separator_line(root)
 
