@@ -53,7 +53,7 @@ R  = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
 
 # Keywords that identify section-header bold runs (any variant)
 HEADER_KEYWORDS = {
-    'challenge', 'execution', 'results', 'solution', 'approach',
+    'challenge', 'execution', 'results', 'result', 'solution', 'approach',
     'objective', 'objectives', 'outcome', 'outcomes', 'background',
     'overview', 'summary', 'insight', 'insights', 'strategy',
     'deliverables', 'impact', 'key results',
@@ -73,6 +73,7 @@ HEADER_NORMALIZE = {
     'approach':     'EXECUTION',
     'strategy':     'EXECUTION',
     'deliverables': 'EXECUTION',
+    'result':       'RESULTS',
     'results':      'RESULTS',
     'outcome':      'RESULTS',
     'outcomes':     'RESULTS',
@@ -80,6 +81,16 @@ HEADER_NORMALIZE = {
     'summary':      'RESULTS',
     'key results':  'RESULTS',
 }
+
+
+def _clean_header_key(text):
+    """Normalise header-like text to a lookup key.
+    Strips whitespace, trailing punctuation, then a leading 'the '
+    so 'The Result.' → 'result' (matches HEADER_KEYWORDS)."""
+    cleaned = (text or '').strip().lower().rstrip('.:')
+    if cleaned.startswith('the '):
+        cleaned = cleaned[4:].strip()
+    return cleaned
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -126,8 +137,10 @@ def run_is_bold(rpr_el):
 
 
 def is_header_text(text):
-    """True if cleaned text matches a known section-header keyword."""
-    return text.strip().lower().rstrip('.:') in HEADER_KEYWORDS
+    """True if cleaned text matches a known section-header keyword.
+    Recognises plain forms ('Challenge'), trailing punctuation
+    ('Challenge:') and 'the X' prefix ('The Result')."""
+    return _clean_header_key(text) in HEADER_KEYWORDS
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -434,142 +447,334 @@ def fix_content_spacing(txBody):
                 br_rpr.append(latin_element(FONT_BODY))
 
 
+def _build_separator_paragraph(shape_cx_emu=5486400):
+    """Return an <a:p> whose run renders as a single thin dark horizontal line.
+
+    Trick: a paragraph with one left tab stop at ~95 % of the shape width and
+    a single TAB character that has single-underline applied. PowerPoint
+    renders the underline across the tab's whitespace, giving one continuous
+    solid line whose width scales with the host text box. No font-fallback,
+    no character-wrapping, no geometry guessing.
+    """
+    # 95% of shape width, but capped so it never exceeds the text area
+    tab_pos = max(914400, int(shape_cx_emu * 0.95))
+    sep_xml = (
+        '<a:p xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+          '<a:pPr algn="l" indent="0" marL="0">'
+            '<a:spcBef><a:spcPts val="400"/></a:spcBef>'
+            '<a:spcAft><a:spcPts val="300"/></a:spcAft>'
+            '<a:buNone/>'
+            '<a:tabLst>'
+              f'<a:tab pos="{tab_pos}" algn="l"/>'
+            '</a:tabLst>'
+          '</a:pPr>'
+          '<a:r>'
+            '<a:rPr lang="en-US" sz="400" u="sng">'
+              '<a:solidFill><a:srgbClr val="' + DARK_BG + '"/></a:solidFill>'
+              '<a:uFill><a:solidFill><a:srgbClr val="' + DARK_BG + '"/></a:solidFill></a:uFill>'
+              '<a:latin typeface="Galvji"/>'
+            '</a:rPr>'
+            '<a:t>\t</a:t>'
+          '</a:r>'
+        '</a:p>'
+    )
+    return etree.fromstring(sep_xml)
+
+
 def add_separator_line(root):
     """
-    Add a thin dark horizontal line between the intro paragraph(s) and the first
-    section header (CHALLENGE / EXECUTION / RESULTS) on content slides.
+    Insert a thin dark horizontal line between the intro paragraph(s) and the
+    first section header (CHALLENGE / EXECUTION / RESULTS) on content slides.
 
-    Handles two layout patterns:
-      1. Separate paragraphs — intro paragraph(s) followed by a header paragraph.
-      2. Single paragraph with line breaks — intro run + <a:br> + header run
-         (common pattern in decks where Challenge/Execution/Results live inside
-         one text block).
+    The separator is injected as a paragraph inside the same text box as the
+    header, so it always sits directly above the header regardless of how
+    many lines the intro wraps to — no geometry estimation.
 
-    Rules:
-      • If there's no intro text before the header (header is the first thing
-        in the shape), no line is added — a floating line would look detached.
-      • The line spans the same x/width as the shape containing the header.
-      • y is computed from the shape's top + estimated height of the intro
-        text, based on 11 pt Galvji body at the text box's width.
+    Two layout patterns are handled:
+      1. Separate paragraphs — insert the separator paragraph right before
+         the first paragraph whose first visible run is a header.
+      2. Single paragraph with <a:br> line breaks — split the paragraph so
+         that everything before the header run becomes its own paragraph;
+         insert the separator; then let the header run start a new paragraph.
+
+    If there's no intro text before the header, no separator is added (a
+    floating line at the top of a text box looks detached).
     """
-    spTree = root.find(f'.//{{{PP}}}spTree')
-    if spTree is None:
-        return
-
-    AVG_CHAR_EMU = 76_200   # avg 11pt Galvji char width
-    LINE_HEIGHT  = 210_000  # 11pt × ~1.5 line-height
-    PARA_GAP     = 30_000
-    BR_HEIGHT    = 140_000  # an explicit <a:br> renders shorter than a full line
-    TOP_PADDING  = 60_000
-
-    target_sp = None
-    intro_wrapped_lines = 0     # estimated wrapped text lines before header
-    intro_extra_brs    = 0     # explicit <a:br> elements between intro and header
-
-    for sp in spTree.iter(qn('p', 'sp')):
+    for sp in root.findall(f'.//{{{PP}}}sp'):
         txBody = sp.find(qn('p', 'txBody'))
         if txBody is None:
             continue
+
+        paras = txBody.findall(qn('a', 'p'))
+        if not paras:
+            continue
+
+        # Measure shape width so the tab stop can scale to this text box
+        shape_cx_emu = 5486400  # 6" default
         xfrm = sp.find(f'.//{{{A}}}xfrm')
-        if xfrm is None:
-            continue
-        ext_el = xfrm.find(qn('a', 'ext'))
-        if ext_el is None:
-            continue
-        shape_cx = int(ext_el.get('cx', 4788000))
-        chars_per_line = max(10, shape_cx // AVG_CHAR_EMU)
+        if xfrm is not None:
+            ext = xfrm.find(qn('a', 'ext'))
+            if ext is not None:
+                shape_cx_emu = int(ext.get('cx', shape_cx_emu))
 
-        this_wrapped = 0
-        this_brs     = 0
-        found_header = False
+        # Find the first paragraph that contains a header run
+        target_idx    = None
+        target_para   = None
+        target_child  = None   # the <a:r> header element, for split case
+        target_inline = False  # True if header is not the first run in its paragraph
 
-        for para in txBody.findall(qn('a', 'p')):
-            if found_header:
-                break
-            chars_before_header_in_para = 0
-            brs_before_header_in_para   = 0
-            header_in_this_para         = False
+        for i, para in enumerate(paras):
+            first_visible_is_header = False
+            saw_text_before_header  = False
+            hdr_child               = None
 
             for child in list(para):
                 tag = child.tag.split('}')[-1] if '}' in child.tag else child.tag
                 if tag == 'r':
                     rpr  = child.find(qn('a', 'rPr'))
                     t_el = child.find(qn('a', 't'))
-                    text = (t_el.text or '') if t_el is not None else ''
-                    if (rpr is not None and run_is_bold(rpr)
-                            and is_header_text(text.strip())):
-                        target_sp = sp
-                        header_in_this_para = True
+                    text = (t_el.text or '').strip() if t_el is not None else ''
+                    is_hdr = (rpr is not None and run_is_bold(rpr)
+                              and is_header_text(text))
+                    if is_hdr and hdr_child is None:
+                        hdr_child = child
+                        if not saw_text_before_header:
+                            first_visible_is_header = True
                         break
-                    chars_before_header_in_para += len(text)
+                    if text:
+                        saw_text_before_header = True
                 elif tag == 'br':
-                    brs_before_header_in_para += 1
+                    # only counts as "before header" if we've already seen text
+                    if saw_text_before_header:
+                        pass
 
-            if header_in_this_para:
-                # Only this paragraph's pre-header content counts
-                if chars_before_header_in_para > 0:
-                    this_wrapped += max(1,
-                        (chars_before_header_in_para + chars_per_line - 1) // chars_per_line)
-                this_brs += brs_before_header_in_para
-                found_header = True
-            else:
-                # Entire paragraph is intro content (or empty spacer)
-                para_text = ''.join((t.text or '')
-                                    for t in para.iter(qn('a', 't')))
-                if para_text.strip():
-                    this_wrapped += max(1,
-                        (len(para_text) + chars_per_line - 1) // chars_per_line)
-                # empty paragraphs still take vertical space
-                else:
-                    this_brs += 1
+            if hdr_child is not None:
+                target_idx    = i
+                target_para   = para
+                target_child  = hdr_child
+                target_inline = not first_visible_is_header
+                break
 
-        if target_sp is not None:
-            intro_wrapped_lines = this_wrapped
-            intro_extra_brs    = this_brs
-            break
+        if target_para is None:
+            continue
 
-    # No header found, or no intro text/breaks before it — no line
-    if target_sp is None or (intro_wrapped_lines == 0 and intro_extra_brs == 0):
+        # ── Check there IS meaningful intro content before the header ─────
+        has_intro = False
+        if target_inline:
+            # Any text before the header run in the same paragraph counts
+            for child in list(target_para):
+                if child is target_child:
+                    break
+                if child.tag == qn('a', 'r'):
+                    t_el = child.find(qn('a', 't'))
+                    if t_el is not None and (t_el.text or '').strip():
+                        has_intro = True
+                        break
+        # Prior paragraphs with text also count
+        if not has_intro:
+            for j in range(target_idx):
+                for t in paras[j].iter(qn('a', 't')):
+                    if (t.text or '').strip():
+                        has_intro = True
+                        break
+                if has_intro:
+                    break
+
+        if not has_intro:
+            continue
+
+        # ── Separate-paragraph pattern: insert before the header paragraph ─
+        if not target_inline:
+            txBody.insert(list(txBody).index(target_para),
+                          _build_separator_paragraph(shape_cx_emu))
+        else:
+            # ── Inline pattern: split the paragraph at the header run ─────
+            # Build a new paragraph containing everything BEFORE target_child.
+            # Keep target_para's <a:pPr> (if any) on the new intro paragraph.
+            new_para = etree.SubElement(txBody, qn('a', 'p'))
+            pPr = target_para.find(qn('a', 'pPr'))
+            if pPr is not None:
+                # Deep-copy the pPr so both paragraphs can keep it
+                new_para.append(etree.fromstring(etree.tostring(pPr)))
+
+            # Move pre-header children (except pPr) into new_para
+            pre_header_children = []
+            for child in list(target_para):
+                if child is target_child:
+                    break
+                if child.tag == qn('a', 'pPr'):
+                    continue
+                pre_header_children.append(child)
+
+            # If the last pre-header child is an <a:br>, drop it — the
+            # paragraph break replaces the soft line break.
+            while (pre_header_children
+                   and pre_header_children[-1].tag == qn('a', 'br')):
+                pre_header_children.pop()
+
+            for child in pre_header_children:
+                target_para.remove(child)
+                new_para.append(child)
+
+            # Move new_para into position: right before target_para
+            txBody.remove(new_para)
+            txBody.insert(list(txBody).index(target_para), new_para)
+            # Then the separator right after the new intro paragraph
+            txBody.insert(list(txBody).index(target_para),
+                          _build_separator_paragraph(shape_cx_emu))
+
+        # Only add one separator per slide — stop at the first header shape
         return
 
-    # ── Geometry of the header's container shape ──────────────────────────
-    xfrm = target_sp.find(f'.//{{{A}}}xfrm')
-    off_el = xfrm.find(qn('a', 'off'))
-    ext_el = xfrm.find(qn('a', 'ext'))
-    if off_el is None or ext_el is None:
+
+def enable_text_autofit(root):
+    """Add <a:normAutofit/> to every text box so PowerPoint auto-shrinks
+    content that overflows.
+
+    Applied to titles as well, because on cover slides we force a big
+    32 pt title into whatever title box the source deck provided, which
+    is often only 0.39" tall (the Pokemon template does the same). Letting
+    PowerPoint shrink guarantees the text stays inside the box without
+    wrapping to an awkward second line.
+    """
+    for sp in root.findall(f'.//{{{PP}}}sp'):
+        txBody = sp.find(qn('p', 'txBody'))
+        if txBody is None:
+            continue
+        bodyPr = txBody.find(qn('a', 'bodyPr'))
+        if bodyPr is None:
+            bodyPr = etree.SubElement(txBody, qn('a', 'bodyPr'))
+        # Remove any existing autofit directive
+        for tag in ('normAutofit', 'spAutoFit', 'noAutofit'):
+            for ex in bodyPr.findall(qn('a', tag)):
+                bodyPr.remove(ex)
+        autofit = etree.SubElement(bodyPr, qn('a', 'normAutofit'))
+        # Let PowerPoint shrink up to 25 % if needed
+        autofit.set('fontScale', '100000')
+        autofit.set('lnSpcReduction', '0')
+
+
+def expand_cover_text_boxes(root):
+    """Cover slides hard-code the title at 32 pt and subtitle at 16 pt
+    (see COVER_TITLE_SZ / COVER_BODY_SZ). Source decks often give those
+    shapes tiny heights sized for their original 23 pt title, so the
+    bigger text overflows and wraps mid-word ("LAVAZZA – THE COFFEE /
+    SOCIETY"). This grows each cover text box (title + any non-picture
+    placeholder text body) to have at least enough height to fit a
+    single line of its target font size at 1.3× line-height.
+
+    Only the ``cy`` (height) of the shape's <a:xfrm><a:ext/> is changed,
+    and only when the existing height is smaller than the computed
+    minimum — we never shrink a box.
+    """
+    EMU_PER_INCH = 914400
+    POINTS_PER_INCH = 72
+    LINE_HEIGHT_MULT = 1.3
+
+    for sp in root.findall(f'.//{{{PP}}}sp'):
+        ph = sp.find(f'.//{{{PP}}}ph')
+        ph_type = ph.get('type') if ph is not None else None
+        txBody = sp.find(qn('p', 'txBody'))
+        if txBody is None:
+            continue
+
+        # Determine the target point size for this shape
+        if ph_type == 'title':
+            target_pt = int(COVER_TITLE_SZ) / 100   # 32
+        else:
+            target_pt = int(COVER_BODY_SZ)  / 100   # 16
+
+        needed_emu = int(target_pt / POINTS_PER_INCH
+                         * LINE_HEIGHT_MULT * EMU_PER_INCH)
+
+        spPr = sp.find(qn('p', 'spPr'))
+        if spPr is None:
+            continue
+        xfrm = spPr.find(qn('a', 'xfrm'))
+        if xfrm is None:
+            continue
+        ext = xfrm.find(qn('a', 'ext'))
+        if ext is None:
+            continue
+        try:
+            current_cy = int(ext.get('cy', '0'))
+        except ValueError:
+            continue
+        if current_cy < needed_emu:
+            ext.set('cy', str(needed_emu))
+
+
+def suppress_inherited_pic_placeholders(root, layout_xml_bytes):
+    """Silence any empty picture placeholders inherited from the slide's
+    layout by adding matching-idx override shapes to the slide.
+
+    Rekorderlig's content layout (slideLayout65.xml) has three picture
+    placeholders covering the left half / bottom of the slide. When the
+    slide doesn't fill them, PowerPoint still renders the layout's
+    placeholder frame (usually white), so the rebranded cream bg is
+    invisible in those regions.
+
+    The standard fix is to add a <p:sp> to the slide with matching
+    <p:ph idx="N"/> — PowerPoint then treats the placeholder as
+    user-overridden and renders nothing.
+    """
+    if layout_xml_bytes is None:
+        return
+    try:
+        layout_root = etree.fromstring(layout_xml_bytes)
+    except etree.XMLSyntaxError:
         return
 
-    shape_x  = int(off_el.get('x', 0))
-    shape_y  = int(off_el.get('y', 0))
-    shape_cx = int(ext_el.get('cx', 4788000))
-    shape_cy = int(ext_el.get('cy', 0))
+    # Indices already overridden by the slide
+    slide_ph_idxs = set()
+    for ph in root.iter(qn('p', 'ph')):
+        idx_val = ph.get('idx')
+        if idx_val is not None:
+            slide_ph_idxs.add(idx_val)
+        # Also collect by implicit "0" when idx missing
+        elif ph.get('type') is not None:
+            slide_ph_idxs.add('_type_' + ph.get('type'))
 
-    intro_height = (intro_wrapped_lines * LINE_HEIGHT
-                    + intro_extra_brs * BR_HEIGHT
-                    + PARA_GAP)
-    line_y = shape_y + intro_height + TOP_PADDING
+    # Find picture placeholders in the layout
+    pic_phs = []
+    for ph in layout_root.iter(qn('p', 'ph')):
+        ph_type = ph.get('type', '')
+        if ph_type not in ('pic', 'body'):
+            # Only picture + body placeholders tend to be empty image frames.
+            # (body placeholders can hold pictures when the layout is design-led.)
+            continue
+        # Only target picture placeholders — body placeholders may be text
+        if ph_type == 'body':
+            continue
+        idx_val = ph.get('idx', '0')
+        pic_phs.append(idx_val)
 
-    # Clamp to stay inside the shape
-    if shape_cy > 0:
-        line_y = min(line_y, shape_y + shape_cy - 100_000)
-    line_y = max(line_y, shape_y)
+    # Insert empty override sp for each unfilled pic placeholder
+    cSld = root.find(qn('p', 'cSld'))
+    if cSld is None:
+        return
+    spTree = cSld.find(qn('p', 'spTree'))
+    if spTree is None:
+        return
 
-    # ── Build and append separator ────────────────────────────────────────
-    sep_id = 9001
-    sep_xml = f'''<p:sp xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
-                       xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+    next_id = 9100
+    for idx_val in pic_phs:
+        if idx_val in slide_ph_idxs:
+            continue
+        override_xml = f'''<p:sp xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+                                 xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
   <p:nvSpPr>
-    <p:cNvPr id="{sep_id}" name="SeparatorLine"/>
+    <p:cNvPr id="{next_id}" name="PlaceholderOverride_{idx_val}"/>
     <p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>
-    <p:nvPr/>
+    <p:nvPr><p:ph type="pic" idx="{idx_val}"/></p:nvPr>
   </p:nvSpPr>
   <p:spPr>
     <a:xfrm>
-      <a:off x="{shape_x}" y="{line_y}"/>
-      <a:ext cx="{shape_cx}" cy="12700"/>
+      <a:off x="0" y="0"/>
+      <a:ext cx="1" cy="1"/>
     </a:xfrm>
     <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
-    <a:solidFill><a:srgbClr val="{DARK_BG}"/></a:solidFill>
+    <a:noFill/>
     <a:ln><a:noFill/></a:ln>
   </p:spPr>
   <p:txBody>
@@ -578,8 +783,156 @@ def add_separator_line(root):
     <a:p><a:endParaRPr lang="en-US"/></a:p>
   </p:txBody>
 </p:sp>'''
-    sep_el = etree.fromstring(sep_xml)
-    spTree.append(sep_el)
+        spTree.append(etree.fromstring(override_xml))
+        next_id += 1
+
+
+_WHITE_SCHEME_NAMES = {'bg1', 'bg2', 'lt1', 'lt2', 'background1', 'background2'}
+
+
+def transparentize_text_box_fills(root):
+    """Remove shape-level white/light fills from text-bearing shapes so the
+    slide background shows through.
+
+    Some source decks (e.g. Rekorderlig) carry an explicit
+    ``<a:solidFill><a:schemeClr val="bg1"/></a:solidFill>`` at the shape level
+    on each content placeholder. That renders a white rectangle on top of
+    the rebranded cream slide background, producing very noticeable
+    "text box islands". The fix is to strip any white/light fill on text
+    boxes and replace it with an explicit ``<a:noFill/>`` to override any
+    inherited fill from the layout/master.
+
+    We only touch shapes that carry a ``<p:txBody>`` (text frames and
+    content placeholders) — pictures, graphic frames, and the
+    BackgroundShield itself are left alone.
+
+    Coloured fills (e.g. intentional green ``#46DE66`` accent panels) are
+    preserved — we only strip fills that evaluate to white/light:
+    ``srgbClr`` values FFFFFF / FFFAF0, or ``schemeClr`` names in the
+    light/background group.
+    """
+    def _fill_is_white(fill_el):
+        """Return True if this fill element resolves to white/light."""
+        # Walk direct children to find the colour spec
+        for child in fill_el:
+            local = child.tag.split('}')[-1]
+            if local == 'srgbClr':
+                val = (child.get('val') or '').upper()
+                if val in ('FFFFFF', 'FFFAF0'):
+                    return True
+            elif local == 'schemeClr':
+                val = (child.get('val') or '').lower()
+                if val in _WHITE_SCHEME_NAMES:
+                    return True
+        return False
+
+    FILL_TAGS = ('solidFill', 'gradFill', 'pattFill', 'blipFill')
+
+    for sp in root.findall(f'.//{{{PP}}}sp'):
+        # Skip the shield — we need its cream fill to stay.
+        cNvPr = sp.find(f'.//{{{PP}}}cNvPr')
+        name = cNvPr.get('name', '') if cNvPr is not None else ''
+        if name == 'BackgroundShield':
+            continue
+
+        txBody = sp.find(qn('p', 'txBody'))
+        if txBody is None:
+            continue  # not a text box — leave fills alone
+
+        spPr = sp.find(qn('p', 'spPr'))
+        if spPr is None:
+            continue
+
+        # Collect the fill children in document order
+        removed_any_white = False
+        has_noFill = False
+        for child in list(spPr):
+            local = child.tag.split('}')[-1]
+            if local == 'noFill':
+                has_noFill = True
+                continue
+            if local not in FILL_TAGS:
+                continue
+            # Only strip solid fills that resolve to white/light;
+            # for grad/patt/blip, strip only if they'd clearly be light
+            # (we don't try to parse gradient stops — leave as-is to be safe).
+            if local == 'solidFill' and _fill_is_white(child):
+                spPr.remove(child)
+                removed_any_white = True
+
+        if removed_any_white and not has_noFill:
+            # Insert <a:noFill/> so any inherited layout/master fill is
+            # explicitly overridden instead of showing through.
+            # <a:noFill/> must come after <a:xfrm>/<a:prstGeom> in a
+            # well-formed spPr — appending works in practice because the
+            # stripped fills were later in the list anyway.
+            noFill = etree.Element(qn('a', 'noFill'))
+            # Place it where the removed fill was (append is fine — the
+            # EG_FillProperties slot in spPr's XSD is order-flexible in
+            # practice for PowerPoint rendering).
+            # Find the right insertion point: after prstGeom / custGeom if present
+            insert_idx = len(spPr)
+            for i, c in enumerate(spPr):
+                if c.tag.split('}')[-1] in ('prstGeom', 'custGeom'):
+                    insert_idx = i + 1
+                    break
+            spPr.insert(insert_idx, noFill)
+
+
+def shield_layout_placeholders(root, bg_hex):
+    """Insert a slide-sized rectangle with solid `bg_hex` fill as the FIRST
+    shape in the spTree, so empty picture placeholders inherited from the
+    slide layout don't render as white/grey frames over our rebrand bg.
+
+    All real slide content (text, images) still paints on top because it
+    appears later in the spTree.
+    """
+    cSld = root.find(qn('p', 'cSld'))
+    if cSld is None:
+        return
+    spTree = cSld.find(qn('p', 'spTree'))
+    if spTree is None:
+        return
+
+    # Determine slide dimensions from the slide element's ancestors —
+    # when we don't know them, use 16:9 default (13.33" × 7.5").
+    cx_default = 12192000   # 13.33"
+    cy_default =  6858000   # 7.5"
+
+    shield_xml = f'''<p:sp xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+                           xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:nvSpPr>
+    <p:cNvPr id="9050" name="BackgroundShield"/>
+    <p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr>
+    <p:nvPr/>
+  </p:nvSpPr>
+  <p:spPr>
+    <a:xfrm>
+      <a:off x="0" y="0"/>
+      <a:ext cx="{cx_default}" cy="{cy_default}"/>
+    </a:xfrm>
+    <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+    <a:solidFill><a:srgbClr val="{bg_hex}"/></a:solidFill>
+    <a:ln><a:noFill/></a:ln>
+  </p:spPr>
+  <p:txBody>
+    <a:bodyPr/>
+    <a:lstStyle/>
+    <a:p><a:endParaRPr lang="en-US"/></a:p>
+  </p:txBody>
+</p:sp>'''
+    shield = etree.fromstring(shield_xml)
+
+    # Insert at the very top of spTree, but AFTER any nvGrpSpPr/grpSpPr
+    # children (which must come first in a valid spTree).
+    insert_idx = 0
+    for i, child in enumerate(list(spTree)):
+        local = child.tag.split('}')[-1]
+        if local in ('nvGrpSpPr', 'grpSpPr'):
+            insert_idx = i + 1
+        else:
+            break
+    spTree.insert(insert_idx, shield)
 
 
 def process_content_slide(root):
@@ -616,7 +969,7 @@ def process_content_slide(root):
                 # Normalise to canonical CHALLENGE / EXECUTION / RESULTS
                 t_el = rpr.getnext()
                 if t_el is not None and t_el.tag == qn('a', 't') and t_el.text:
-                    key = t_el.text.strip().lower().rstrip('.:')
+                    key = _clean_header_key(t_el.text)
                     t_el.text = HEADER_NORMALIZE.get(key, t_el.text.upper())
             else:
                 set_content_body_sz(rpr)   # 11 pt — bullet points / body text
@@ -1220,12 +1573,45 @@ def convert_pptx(input_path, output_path, text_replacements=None):
                     # Set background
                     if stype in ('cover', 'testimonial'):
                         set_slide_background(root, DARK_BG)
+                        bg_hex = DARK_BG
                     else:
                         set_slide_background(root, CREAM_BG)
+                        bg_hex = CREAM_BG
+
+                    # Paint over empty layout placeholders that would
+                    # otherwise leak white/grey frames over our bg.
+                    shield_layout_placeholders(root, bg_hex)
+
+                    # Strip white shape-level fills on text boxes so the
+                    # slide bg shows through (fixes Rekorderlig's
+                    # "white-rectangle" text frames over the cream bg).
+                    transparentize_text_box_fills(root)
+
+                    # Suppress inherited picture placeholders (empty image
+                    # frames from the layout) so they don't render white
+                    # over the rebranded background.
+                    rels_path = f'ppt/slides/_rels/slide{slide_num}.xml.rels'
+                    layout_bytes = None
+                    if rels_path in zin.namelist():
+                        rels_root = etree.fromstring(zin.read(rels_path))
+                        CT_RELS = 'http://schemas.openxmlformats.org/package/2006/relationships'
+                        RELS_LAYOUT_TYPE = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout'
+                        for rel in rels_root.findall(f'{{{CT_RELS}}}Relationship'):
+                            if rel.get('Type') == RELS_LAYOUT_TYPE:
+                                lpath = 'ppt/slideLayouts/' + rel.get('Target', '').split('/')[-1]
+                                if lpath in zin.namelist():
+                                    layout_bytes = zin.read(lpath)
+                                break
+                    suppress_inherited_pic_placeholders(root, layout_bytes)
 
                     # Apply text/font styling
                     if stype == 'cover':
                         process_cover_slide(root)
+                        # Grow under-sized cover title/subtitle boxes so
+                        # the hard-coded 32 pt / 16 pt text doesn't wrap
+                        # awkwardly (e.g. Lavazza "LAVAZZA – THE COFFEE /
+                        # SOCIETY").
+                        expand_cover_text_boxes(root)
                     elif stype == 'content':
                         process_content_slide(root)
                     elif stype == 'grid':
@@ -1233,6 +1619,9 @@ def convert_pptx(input_path, output_path, text_replacements=None):
                     elif stype == 'testimonial':
                         qrid = QUOTE_MARK_RID if quote_mark_bytes is not None else None
                         process_testimonial_slide(root, qmark_rid=qrid)
+
+                    # Let PowerPoint shrink body text if it overflows
+                    enable_text_autofit(root)
 
                     # Catchall: sweep any residual legacy fonts that weren't in
                     # rPr/endParaRPr (e.g. defRPr inside lstStyle defaults).
