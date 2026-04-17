@@ -1141,6 +1141,12 @@ def convert_pptx(input_path, output_path, text_replacements=None):
                         qrid = QUOTE_MARK_RID if quote_mark_bytes is not None else None
                         process_testimonial_slide(root, qmark_rid=qrid)
 
+                    # Catchall: sweep any residual legacy fonts that weren't in
+                    # rPr/endParaRPr (e.g. defRPr inside lstStyle defaults).
+                    for lat in root.iter(qn('a', 'latin')):
+                        if lat.get('typeface', '') in _OLD_BODY_FONTS:
+                            lat.set('typeface', FONT_BODY)
+
                     data = etree.tostring(
                         root,
                         xml_declaration=True,
