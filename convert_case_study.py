@@ -458,23 +458,31 @@ def fix_content_spacing(txBody):
 def _build_separator_paragraph(shape_cx_emu=5486400):
     """Return an <a:p> whose run renders as a single thin dark horizontal line.
 
-    Trick: a paragraph with one left tab stop at ~95 % of the shape width and
-    a single TAB character that has single-underline applied. PowerPoint
-    renders the underline across the tab's whitespace, giving one continuous
-    solid line whose width scales with the host text box. No font-fallback,
-    no character-wrapping, no geometry guessing.
+    Approach: a run of non-breaking spaces with single-underline applied. The
+    number of spaces is scaled to the shape width so the underline spans ~95 %
+    of the text area. This works in both PowerPoint *and* LibreOffice, unlike
+    the tab+underline trick, which LibreOffice ignores when exporting to PDF.
+
+    Why non-breaking spaces rather than regular spaces: Office collapses
+    trailing regular whitespace at render time, which can shorten or hide the
+    line. Non-breaking spaces are preserved verbatim and keep their underline.
+
+    Why U+00A0 specifically: it's a narrow, predictable glyph with no
+    font-dependent tail — em/en spaces vary more across fallback fonts.
     """
-    # 95% of shape width, but capped so it never exceeds the text area
-    tab_pos = max(914400, int(shape_cx_emu * 0.95))
+    # At sz="400" (4 pt), a non-breaking space is roughly 17 500 EMU wide in
+    # Galvji. Fill ~90 % of the shape width with spaces; clamp so very narrow
+    # boxes still get a usable segment.
+    CHAR_EMU    = 17500
+    target_emu  = int(shape_cx_emu * 0.90)
+    n_spaces    = max(30, min(240, target_emu // CHAR_EMU))
+    spaces      = '\u00A0' * int(n_spaces)
     sep_xml = (
         '<a:p xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
           '<a:pPr algn="l" indent="0" marL="0">'
             '<a:spcBef><a:spcPts val="400"/></a:spcBef>'
             '<a:spcAft><a:spcPts val="300"/></a:spcAft>'
             '<a:buNone/>'
-            '<a:tabLst>'
-              f'<a:tab pos="{tab_pos}" algn="l"/>'
-            '</a:tabLst>'
           '</a:pPr>'
           '<a:r>'
             '<a:rPr lang="en-US" sz="400" u="sng">'
@@ -482,7 +490,7 @@ def _build_separator_paragraph(shape_cx_emu=5486400):
               '<a:uFill><a:solidFill><a:srgbClr val="' + DARK_BG + '"/></a:solidFill></a:uFill>'
               '<a:latin typeface="Galvji"/>'
             '</a:rPr>'
-            '<a:t>\t</a:t>'
+            f'<a:t>{spaces}</a:t>'
           '</a:r>'
         '</a:p>'
     )
