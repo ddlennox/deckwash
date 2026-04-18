@@ -20,7 +20,7 @@ import tempfile
 import webbrowser
 from pathlib import Path
 
-from flask import Flask, request, send_file, jsonify, Response, stream_with_context, session, redirect, url_for
+from flask import Flask, request, send_file, send_from_directory, abort, jsonify, Response, stream_with_context, session, redirect, url_for
 
 # ── App setup ─────────────────────────────────────────────────────────────────
 app = Flask(__name__)
@@ -253,6 +253,34 @@ def logout():
     return redirect(url_for('login'))
 
 
+# ── Before / after gallery ───────────────────────────────────────────────────
+# Static reference showcase: 44 sample decks, original on the left,
+# rebranded on the right. Login-gated, same as the rest of DeckWash.
+GALLERY_DIR = BASE_DIR / 'preview_gallery'
+
+@app.route('/gallery')
+@app.route('/gallery/')
+def gallery():
+    if not session.get('logged_in'):
+        return redirect(url_for('login'))
+    index_file = GALLERY_DIR / 'index.html'
+    if not index_file.exists():
+        return ('Gallery has not been built yet. '
+                'Run <code>python3 build_preview_gallery.py</code> locally, '
+                'then commit the <code>preview_gallery/</code> folder.'), 404
+    return send_file(str(index_file), mimetype='text/html')
+
+
+@app.route('/gallery/<path:subpath>')
+def gallery_asset(subpath):
+    if not session.get('logged_in'):
+        return redirect(url_for('login'))
+    # Only allow images + the index HTML — never expose PDFs or anything else
+    if not any(subpath.endswith(ext) for ext in ('.jpg', '.jpeg', '.png', '.html', '.css')):
+        abort(404)
+    return send_from_directory(str(GALLERY_DIR), subpath)
+
+
 @app.route('/')
 def index():
     if not session.get('logged_in'):
@@ -400,11 +428,9 @@ HTML = """<!DOCTYPE html>
   header {
     background: #231F20;
     padding: 20px 48px 16px;
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
     align-items: center;
-    justify-content: space-between;
-    text-align: center;
     min-height: 90px;
   }
 
@@ -413,6 +439,7 @@ HTML = """<!DOCTYPE html>
     align-items: baseline;
     gap: 12px;
     justify-content: center;
+    grid-column: 2;
   }
 
   header h1 {
@@ -428,6 +455,25 @@ HTML = """<!DOCTYPE html>
     font-size: 1.4rem;
     line-height: 1;
   }
+
+  .header-nav {
+    grid-column: 3;
+    justify-self: end;
+    display: flex;
+    gap: 20px;
+    align-items: center;
+  }
+
+  .header-nav a {
+    font-family: 'Galvji', Georgia, serif;
+    font-size: 0.85rem;
+    color: rgba(255,255,255,0.6);
+    text-decoration: none;
+    letter-spacing: 0.03em;
+    transition: color 0.15s;
+  }
+
+  .header-nav a:hover { color: #46DE66; }
 
 
   /* ── Hero strip ── */
@@ -693,6 +739,10 @@ HTML = """<!DOCTYPE html>
     <span class="wave">🌊</span>
     <h1>DeckWash</h1>
   </div>
+  <nav class="header-nav">
+    <a href="/gallery">See examples</a>
+    <a href="/logout">Log out</a>
+  </nav>
 </header>
 
 <div class="hero">

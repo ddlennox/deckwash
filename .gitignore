@@ -1,6 +1,15 @@
 # Case study files — keep out of git (too large)
 old_case_studies/
 new_case_studies/
+new_case_studies_backup_*/
+
+# Preview-gallery heavyweights — the JPEGs + index.html ship, but not the
+# intermediate PDFs or full-size PNGs (both run to hundreds of MB).
+preview_gallery/old_pdfs/
+preview_gallery/new_pdfs/
+preview_gallery/old_pngs/
+preview_gallery/new_pngs/
+preview_gallery/*.log
 
 # Keep only the two template PPTX files needed for conversion
 *.pptx
