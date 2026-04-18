@@ -259,6 +259,13 @@ def logout():
 GALLERY_DIR = BASE_DIR / 'preview_gallery'
 
 @app.route('/gallery')
+def gallery_no_slash():
+    # Relative image paths in index.html only resolve correctly when the
+    # document URL ends in a slash. Redirect so the browser treats /gallery/
+    # as a directory and loads assets from /gallery/old_jpgs/... etc.
+    return redirect('/gallery/', code=301)
+
+
 @app.route('/gallery/')
 def gallery():
     if not session.get('logged_in'):
