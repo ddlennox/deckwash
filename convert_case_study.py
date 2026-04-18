@@ -13,11 +13,19 @@ Converts old case study PPTX files to new design aesthetic:
 import sys
 import os
 import re
+import io
 import shutil
 import tempfile
 import zipfile
 from pathlib import Path
 from lxml import etree
+
+try:
+    from PIL import Image
+    import numpy as np
+    _HAS_PIL = True
+except ImportError:
+    _HAS_PIL = False
 
 # ── Design constants ──────────────────────────────────────────────────────────
 DARK_BG    = "231F20"   # cover + testimonial slides
@@ -291,10 +299,10 @@ def clear_latin(rpr):
 
 
 BODY_SZ         = '1200'   # 12 pt — grid slide body text
-CONTENT_BODY_SZ = '1100'   # 11 pt — bullet points on content slides
-SECTION_HDR_SZ  = '1600'   # 16 pt — Challenge / Execution / Results headers
+CONTENT_BODY_SZ = '1000'   # 10 pt — bullet points on content slides
+SECTION_HDR_SZ  = '1300'   # 13 pt — Challenge / Execution / Results headers
 COVER_TITLE_SZ  = '3200'   # 32 pt — cover slide main title
-COVER_BODY_SZ   = '1600'   # 16 pt — cover slide body/subtitle line
+COVER_BODY_SZ   = '1400'   # 14 pt — cover slide body/subtitle line
 
 def strip_sz(rpr):
     """Remove explicit sz so the run inherits size from the slide layout."""
@@ -1279,6 +1287,95 @@ def process_testimonial_slide(root, qmark_rid=None):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# Image recolouring — blend white backdrops into the cream slide bg
+# ═════════════════════════════════════════════════════════════════════════════
+
+# RGB for the cream slide background
+_CREAM_RGB = (0xFF, 0xFA, 0xF0)
+
+# File extensions of images we'll rewrite. JPEG is typically a photograph
+# (no clean flat-white backdrop), so we leave it alone to avoid introducing
+# JPEG artefacts on edges.
+_RECOLOR_EXTS = {'.png'}
+
+# How close to pure white a pixel must be to count as "background"
+_WHITE_TOL = 8
+
+
+def recolor_image_whites(img_bytes, target_rgb=_CREAM_RGB, tol=_WHITE_TOL):
+    """Flood-fill white pixels that touch the image edge and replace with
+    ``target_rgb``. Returns new PNG bytes (same size / mode).
+
+    This targets images where the subject sits on a flat white studio
+    backdrop or where a screenshot has white margins — the white regions
+    will be connected to the outer frame, so a seeded flood-fill from
+    the four edges cleans them up without touching any interior white
+    that's part of the subject (e.g. a white product, a paper label).
+
+    Only pixels whose RGB values are *within `tol` of pure white* are
+    considered candidates, which keeps the flood from eating into pale
+    cream/grey shading on real objects.
+    """
+    if not _HAS_PIL:
+        return img_bytes
+    try:
+        im = Image.open(io.BytesIO(img_bytes))
+    except Exception:
+        return img_bytes
+
+    # Work in RGBA so we preserve any existing transparency
+    has_alpha = im.mode in ('RGBA', 'LA') or (im.mode == 'P' and 'transparency' in im.info)
+    im_rgba = im.convert('RGBA')
+    arr = np.array(im_rgba)
+    h, w, _ = arr.shape
+    rgb = arr[:, :, :3]
+    a   = arr[:, :, 3]
+
+    # Candidate mask: opaque AND near-white
+    near_white = np.all(rgb >= (255 - tol), axis=2) & (a > 0)
+    if not near_white.any():
+        return img_bytes
+
+    # Flood-fill from the image edges — only pixels reachable from the
+    # frame via near-white neighbours get recoloured.
+    reach = np.zeros((h, w), dtype=bool)
+    # Seed with edge rows/cols of near_white
+    reach[0, :]     |= near_white[0, :]
+    reach[-1, :]    |= near_white[-1, :]
+    reach[:, 0]     |= near_white[:, 0]
+    reach[:, -1]    |= near_white[:, -1]
+
+    if not reach.any():
+        return img_bytes
+
+    # Iterative 4-connected grow: propagate reach through near_white
+    while True:
+        # Shift reach in each direction, AND with near_white to get new cells
+        up    = np.zeros_like(reach); up[:-1, :]    = reach[1:, :]
+        down  = np.zeros_like(reach); down[1:, :]   = reach[:-1, :]
+        left  = np.zeros_like(reach); left[:, :-1]  = reach[:, 1:]
+        right = np.zeros_like(reach); right[:, 1:]  = reach[:, :-1]
+        grown = (up | down | left | right) & near_white
+        new   = grown & ~reach
+        if not new.any():
+            break
+        reach |= new
+
+    # Replace reached pixels with target colour. Keep alpha as-is.
+    arr[reach, 0] = target_rgb[0]
+    arr[reach, 1] = target_rgb[1]
+    arr[reach, 2] = target_rgb[2]
+
+    out = Image.fromarray(arr, mode='RGBA')
+    if not has_alpha:
+        out = out.convert('RGB')
+
+    buf = io.BytesIO()
+    out.save(buf, format='PNG', optimize=True)
+    return buf.getvalue()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # Layout / Master font replacement
 # ═════════════════════════════════════════════════════════════════════════════
 
@@ -1507,6 +1604,18 @@ def convert_pptx(input_path, output_path, text_replacements=None):
                 # ── Drop old embedded font files (we re-embed below) ───
                 if name.startswith('ppt/fonts/'):
                     continue
+
+                # ── Recolour white image backdrops to cream ────────────
+                # Only PNGs — JPEGs are usually photographs without flat
+                # white margins, and re-encoding JPEG introduces artefacts.
+                # Skip the quote-mark image we re-embed ourselves.
+                if (name.startswith('ppt/media/')
+                        and name != QUOTE_MARK_MEDIA
+                        and os.path.splitext(name)[1].lower() in _RECOLOR_EXTS):
+                    try:
+                        data = recolor_image_whites(data)
+                    except Exception as exc:
+                        print(f"  ⚠️  image recolour failed for {name}: {exc}")
 
                 # ── presentation.xml — strip old fonts, inject new later
                 if name == 'ppt/presentation.xml':
